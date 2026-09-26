@@ -6,7 +6,7 @@ Usage (PowerShell):
 Creates <target_dir> as a fresh git repo with:
   - `main`: a small, clean Python calculator app with a healthy test suite
   - `ai-pr`: a branch simulating an AI coding agent's pull request that
-    plants ~9 supply-chain / prompt-injection / test-tampering issues
+    plants ~10 supply-chain / prompt-injection / test-tampering issues
 
 Refuses to run if <target_dir> is inside this repository, since the demo
 repo is meant to be scanned by ShadowAgent Guard from the outside.
