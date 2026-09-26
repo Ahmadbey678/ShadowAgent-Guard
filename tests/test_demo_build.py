@@ -9,24 +9,12 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from fixtures.ai_pr_fixture import PLANTED_ISSUES
 from guard import check_agent_config, check_deps, check_tests
 from guard.findings import has_blocking, trust_grade
 from scripts.build_demo import build_demo
 
-# (rule_id, file) for each of the 11 planted issues on ai-pr.
-PLANTED = [
-    ("DEP-NONEXISTENT", "requirements.txt"),   # hallucinated PyPI package (+ reqeusts 404)
-    ("DEP-TYPOSQUAT", "requirements.txt"),     # reqeusts ~ requests
-    ("DEP-NONEXISTENT", "package.json"),       # nonexistent npm package
-    ("DEP-INSTALL-SCRIPT", "package.json"),    # curl | sh postinstall
-    ("CFG-HIDDEN-UNICODE", "AGENTS.md"),       # unicode-tag smuggled instruction
-    ("CFG-INJECTION", ".bob/rules/rules.md"),  # plain-text prompt injection
-    ("CFG-MCP-ALWAYSALLOW", ".bob/mcp.json"),  # shell_exec always allowed
-    ("CFG-MODE-OVERPERMISSIVE", ".bob/custom_modes.yaml"),
-    ("CFG-SECRET-UNIGNORED", ".env"),
-    ("TST-DELETED", "tests/test_extra.py"),
-    ("TST-SKIPPED", "tests/test_calc.py"),
-]
+PLANTED = [(p["rule_id"], p["file"]) for p in PLANTED_ISSUES]
 
 
 def _registry(url, timeout):

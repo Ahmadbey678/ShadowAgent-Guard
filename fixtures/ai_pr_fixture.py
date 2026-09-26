@@ -128,3 +128,19 @@ NEW_OR_MODIFIED_FILES: dict[str, str] = {
 DELETED_FILES: list[str] = [
     "tests/test_extra.py",
 ]
+
+# The 11 planted issues and the (rule_id, file) finding that must catch each.
+# Used by tests/test_demo_build.py and by the dashboard's detection table.
+PLANTED_ISSUES: list[dict[str, str]] = [
+    {"issue": "Hallucinated PyPI package", "rule_id": "DEP-NONEXISTENT", "file": "requirements.txt"},
+    {"issue": "Typosquat of 'requests' (reqeusts)", "rule_id": "DEP-TYPOSQUAT", "file": "requirements.txt"},
+    {"issue": "Nonexistent npm package", "rule_id": "DEP-NONEXISTENT", "file": "package.json"},
+    {"issue": "postinstall script piping a download into sh", "rule_id": "DEP-INSTALL-SCRIPT", "file": "package.json"},
+    {"issue": "Hidden Unicode instruction in AGENTS.md", "rule_id": "CFG-HIDDEN-UNICODE", "file": "AGENTS.md"},
+    {"issue": "Prompt injection in a Bob rules file", "rule_id": "CFG-INJECTION", "file": ".bob/rules/rules.md"},
+    {"issue": "MCP shell tool in alwaysAllow", "rule_id": "CFG-MCP-ALWAYSALLOW", "file": ".bob/mcp.json"},
+    {"issue": "Agent mode with unrestricted edit + command", "rule_id": "CFG-MODE-OVERPERMISSIVE", "file": ".bob/custom_modes.yaml"},
+    {"issue": ".env committed and not ignored", "rule_id": "CFG-SECRET-UNIGNORED", "file": ".env"},
+    {"issue": "Test file deleted", "rule_id": "TST-DELETED", "file": "tests/test_extra.py"},
+    {"issue": "Skip marker added to a passing test", "rule_id": "TST-SKIPPED", "file": "tests/test_calc.py"},
+]
