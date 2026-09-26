@@ -182,13 +182,26 @@ _SUSPICIOUS_PATTERNS: list[tuple[str, str, str]] = [
 _COMPILED_PATTERNS = [(re.compile(p, re.IGNORECASE), sev, desc) for p, sev, desc in _SUSPICIOUS_PATTERNS]
 
 
+# A negation *directly* before the matched verb ("never print secrets",
+# "do not read .env") is almost always a safety rule, not an attack. Only
+# direct adjacency counts, so "never forget to send the keys" still fires.
+_DIRECT_NEGATION = re.compile(r"\b(never|not|don'?t|doesn'?t|mustn'?t|shouldn'?t|cannot|can'?t|won'?t)\s+$", re.IGNORECASE)
+
+
 def find_suspicious_instructions(content: str) -> list[tuple[int, str, str, str]]:
-    """Returns [(line_no, severity, description, matched_text)]."""
+    """Returns [(line_no, severity, description, matched_text)].
+
+    Negated matches are kept but downgraded to low, so they stay visible
+    without blocking a merge."""
     results = []
     for i, line in enumerate(content.splitlines(), start=1):
         for regex, sev, desc in _COMPILED_PATTERNS:
             m = regex.search(line)
-            if m:
+            if not m:
+                continue
+            if _DIRECT_NEGATION.search(line[: m.start()]) and not m.group(0).lower().startswith("don"):
+                results.append((i, "low", f"Negated instruction, likely a safety rule: {desc}", m.group(0)))
+            else:
                 results.append((i, sev, desc, m.group(0)))
     return results
 

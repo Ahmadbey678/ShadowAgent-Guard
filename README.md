@@ -54,26 +54,42 @@ python -m unittest discover -s tests -v
 report to stdout if `--out` is omitted). Exit code is **1** if any
 critical/high finding is present, **0** otherwise — safe to gate CI on.
 
-## CI gate
+## CI gate: one line in any repo
 
-Every pull request is automatically scanned by
+ShadowAgent Guard is a reusable composite GitHub Action ([`action.yml`](action.yml)).
+Add it to any repository's pull-request workflow:
+
+```yaml
+# .github/workflows/shadowagent-guard.yml
+on: pull_request
+permissions:
+  contents: read
+  security-events: write   # lets the action upload SARIF to Code Scanning
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # both base and head SHAs must be present
+      - uses: Ahmadbey678/ShadowAgent-Guard@main
+```
+
+| Input | Default | Meaning |
+|---|---|---|
+| `base` / `head` | PR base / head SHA | Refs to diff |
+| `fail-on` | `high` | `critical`, `high`, `medium`, `low` or `none` |
+| `sarif` | `true` | Upload SARIF to GitHub Code Scanning (needs `security-events: write`) |
+| `out` | `guard-out` | Output directory for `report.json`, `report.md`, `guard.sarif` |
+
+The action writes `report.md` to the job summary, uploads `guard-out/` as the
+`shadowagent-guard-report` artifact, uploads SARIF (findings appear under
+*Security → Code scanning* and inline on the PR), and fails the job when the
+verdict is BLOCK. Outputs: `verdict`, `grade`, `findings`, `report-json`.
+No secrets are needed; only public registry metadata is queried.
+
+This repository dogfoods the action via `uses: ./` in
 [`.github/workflows/shadowagent-guard.yml`](.github/workflows/shadowagent-guard.yml).
-
-The workflow:
-
-1. Checks out the repository with **full history** (`fetch-depth: 0`) so both
-   the base and head SHAs are present for `git diff`.
-2. Sets up **Python 3.11** (no `pip install` needed — stdlib only).
-3. Runs `python -m guard scan --repo . --base <base-sha> --head <head-sha> --out guard-out`.
-4. Appends `guard-out/report.md` to the **job summary** (`$GITHUB_STEP_SUMMARY`)
-   so findings are visible directly on the Actions run page.
-5. Uploads `guard-out/` as a **build artifact** (`shadowagent-guard-report`)
-   regardless of scan outcome.
-6. **Fails the job** (exit code 1) when any critical or high finding is present,
-   blocking the merge.
-
-No secrets or API keys are required — dependency checks only query public
-registry metadata (PyPI JSON API, npm registry).
 
 ## Architecture
 

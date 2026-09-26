@@ -3,6 +3,11 @@ name: ShadowAgent Guard
 on:
   pull_request:
 
+permissions:
+  contents: read
+  security-events: write # SARIF upload to GitHub Code Scanning
+  actions: read          # required by upload-sarif on private repos
+
 jobs:
   scan:
     name: Supply-chain security scan
@@ -14,27 +19,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      # Dogfood: run this repository's own composite action (action.yml).
+      # Other repos use: Ahmadbey678/ShadowAgent-Guard@main
+      - name: ShadowAgent Guard
+        uses: ./
         with:
-          python-version: "3.11"
-
-      - name: Run ShadowAgent Guard scan
-        run: |
-          python -m guard scan \
-            --repo . \
-            --base ${{ github.event.pull_request.base.sha }} \
-            --head ${{ github.event.pull_request.head.sha }} \
-            --out guard-out
-
-      - name: Write report to job summary
-        if: always()
-        run: cat guard-out/report.md >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload scan artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: shadowagent-guard-report
-          path: guard-out/
-          if-no-files-found: warn
+          fail-on: high

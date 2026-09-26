@@ -1,0 +1,140 @@
+name: "ShadowAgent Guard"
+description: "Block AI-agent supply-chain attacks in pull requests: fake/typosquatted deps, hidden-Unicode prompt injection, over-trusted MCP tools, install scripts and test tampering."
+author: "Ahmadbey678"
+branding:
+  icon: "shield"
+  color: "red"
+
+# Usage (the checkout needs full history so both SHAs exist locally):
+#
+#   permissions:
+#     contents: read
+#     security-events: write   # only needed for the SARIF upload to Code Scanning
+#   steps:
+#     - uses: actions/checkout@v4
+#       with:
+#         fetch-depth: 0
+#     - uses: Ahmadbey678/ShadowAgent-Guard@main
+
+inputs:
+  base:
+    description: "Base git ref/SHA. Defaults to the pull request base SHA (or the previous commit on push)."
+    required: false
+    default: ${{ github.event.pull_request.base.sha }}
+  head:
+    description: "Head git ref/SHA. Defaults to the pull request head SHA (or the pushed SHA)."
+    required: false
+    default: ${{ github.event.pull_request.head.sha }}
+  fail-on:
+    description: "Fail the step when a finding at or above this severity exists: critical | high | medium | low | none."
+    required: false
+    default: "high"
+  sarif:
+    description: "Upload SARIF to GitHub Code Scanning (needs `permissions: security-events: write`)."
+    required: false
+    default: "true"
+  out:
+    description: "Directory (relative to the workspace) for report.json, report.md and guard.sarif."
+    required: false
+    default: "guard-out"
+  artifact-name:
+    description: "Name of the uploaded report artifact."
+    required: false
+    default: "shadowagent-guard-report"
+
+outputs:
+  verdict:
+    description: "BLOCK or PASS"
+    value: ${{ steps.scan.outputs.verdict }}
+  grade:
+    description: "Trust grade A-F"
+    value: ${{ steps.scan.outputs.grade }}
+  findings:
+    description: "Number of active (unsuppressed) findings"
+    value: ${{ steps.scan.outputs.findings }}
+  report-json:
+    description: "Path to report.json"
+    value: ${{ steps.scan.outputs.report-json }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run ShadowAgent Guard
+      id: scan
+      shell: bash
+      env:
+        GUARD_BASE: ${{ inputs.base }}
+        GUARD_HEAD: ${{ inputs.head }}
+        GUARD_FAIL_ON: ${{ inputs.fail-on }}
+        GUARD_OUT: ${{ github.workspace }}/${{ inputs.out }}
+        GUARD_PUSH_BEFORE: ${{ github.event.before }}
+        PYTHONPATH: ${{ github.action_path }}
+      run: |
+        set -uo pipefail
+        PY="$(command -v python3 || command -v python)"
+        BASE="${GUARD_BASE:-$GUARD_PUSH_BEFORE}"
+        HEAD="${GUARD_HEAD:-$GITHUB_SHA}"
+        if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+          echo "::error title=ShadowAgent Guard::No base ref. Pass 'base:' or run on pull_request."
+          exit 2
+        fi
+        for ref in "$BASE" "$HEAD"; do
+          if ! git -C "$GITHUB_WORKSPACE" cat-file -e "$ref^{commit}" 2>/dev/null; then
+            echo "::error title=ShadowAgent Guard::Commit $ref is not in the checkout. Use actions/checkout with 'fetch-depth: 0'."
+            exit 2
+          fi
+        done
+        "$PY" -m guard scan \
+          --repo "$GITHUB_WORKSPACE" --base "$BASE" --head "$HEAD" \
+          --out "$GUARD_OUT" --sarif "$GUARD_OUT/guard.sarif" --fail-on "$GUARD_FAIL_ON"
+        code=$?
+        if [ ! -f "$GUARD_OUT/report.json" ]; then
+          echo "::error title=ShadowAgent Guard::Scan crashed (exit $code) before writing a report."
+          exit 2
+        fi
+        "$PY" - "$GUARD_OUT/report.json" >> "$GITHUB_OUTPUT" <<'PYEOF'
+        import json, sys
+        s = json.load(open(sys.argv[1], encoding="utf-8"))["summary"]
+        print(f"verdict={s['verdict']}")
+        print(f"grade={s['grade']}")
+        print(f"findings={s['total_findings']}")
+        PYEOF
+        echo "report-json=$GUARD_OUT/report.json" >> "$GITHUB_OUTPUT"
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+
+    - name: Write report to job summary
+      if: always()
+      shell: bash
+      env:
+        GUARD_OUT: ${{ github.workspace }}/${{ inputs.out }}
+      run: |
+        if [ -f "$GUARD_OUT/report.md" ]; then cat "$GUARD_OUT/report.md" >> "$GITHUB_STEP_SUMMARY"; fi
+
+    - name: Upload report artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ github.workspace }}/${{ inputs.out }}/
+        if-no-files-found: warn
+
+    - name: Upload SARIF to Code Scanning
+      if: always() && inputs.sarif == 'true' && hashFiles(format('{0}/guard.sarif', inputs.out)) != ''
+      continue-on-error: true
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ github.workspace }}/${{ inputs.out }}/guard.sarif
+        category: shadowagent-guard
+
+    - name: Enforce fail-on
+      shell: bash
+      env:
+        VERDICT: ${{ steps.scan.outputs.verdict }}
+        GRADE: ${{ steps.scan.outputs.grade }}
+        FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        if [ "$VERDICT" = "BLOCK" ]; then
+          echo "::error title=ShadowAgent Guard: BLOCK (grade $GRADE)::Findings at or above '$FAIL_ON' severity. See the job summary and the report artifact."
+          exit 1
+        fi
+        echo "ShadowAgent Guard: PASS (grade $GRADE)"
