@@ -121,7 +121,7 @@ jobs:
   guard:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0          # both base and head SHAs must be present
       - uses: Ahmadbey678/ShadowAgent-Guard@main

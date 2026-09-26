@@ -11,7 +11,7 @@ branding:
 #     contents: read
 #     security-events: write   # only needed for the SARIF upload to Code Scanning
 #   steps:
-#     - uses: actions/checkout@v4
+#     - uses: actions/checkout@v7
 #       with:
 #         fetch-depth: 0
 #     - uses: Ahmadbey678/ShadowAgent-Guard@main
@@ -68,6 +68,7 @@ runs:
         GUARD_FAIL_ON: ${{ inputs.fail-on }}
         GUARD_OUT: ${{ github.workspace }}/${{ inputs.out }}
         GUARD_PUSH_BEFORE: ${{ github.event.before }}
+        GUARD_REPO_LABEL: ${{ github.repository }}
         PYTHONPATH: ${{ github.action_path }}
       run: |
         set -uo pipefail
@@ -85,7 +86,7 @@ runs:
           fi
         done
         "$PY" -m guard scan \
-          --repo "$GITHUB_WORKSPACE" --base "$BASE" --head "$HEAD" \
+          --repo "$GITHUB_WORKSPACE" --repo-label "$GUARD_REPO_LABEL" --base "$BASE" --head "$HEAD" \
           --out "$GUARD_OUT" --sarif "$GUARD_OUT/guard.sarif" --fail-on "$GUARD_FAIL_ON"
         code=$?
         if [ ! -f "$GUARD_OUT/report.json" ]; then
@@ -112,7 +113,7 @@ runs:
 
     - name: Upload report artifact
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.artifact-name }}
         path: ${{ github.workspace }}/${{ inputs.out }}/
@@ -121,7 +122,7 @@ runs:
     - name: Upload SARIF to Code Scanning
       if: always() && inputs.sarif == 'true' && hashFiles(format('{0}/guard.sarif', inputs.out)) != ''
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@v4
       with:
         sarif_file: ${{ github.workspace }}/${{ inputs.out }}/guard.sarif
         category: shadowagent-guard
