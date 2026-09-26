@@ -54,6 +54,27 @@ python -m unittest discover -s tests -v
 report to stdout if `--out` is omitted). Exit code is **1** if any
 critical/high finding is present, **0** otherwise — safe to gate CI on.
 
+## CI gate
+
+Every pull request is automatically scanned by
+[`.github/workflows/shadowagent-guard.yml`](.github/workflows/shadowagent-guard.yml).
+
+The workflow:
+
+1. Checks out the repository with **full history** (`fetch-depth: 0`) so both
+   the base and head SHAs are present for `git diff`.
+2. Sets up **Python 3.11** (no `pip install` needed — stdlib only).
+3. Runs `python -m guard scan --repo . --base <base-sha> --head <head-sha> --out guard-out`.
+4. Appends `guard-out/report.md` to the **job summary** (`$GITHUB_STEP_SUMMARY`)
+   so findings are visible directly on the Actions run page.
+5. Uploads `guard-out/` as a **build artifact** (`shadowagent-guard-report`)
+   regardless of scan outcome.
+6. **Fails the job** (exit code 1) when any critical or high finding is present,
+   blocking the merge.
+
+No secrets or API keys are required — dependency checks only query public
+registry metadata (PyPI JSON API, npm registry).
+
 ## Architecture
 
 ```
