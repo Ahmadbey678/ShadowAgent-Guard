@@ -37,6 +37,7 @@ def _add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--head", required=True, help="Head git ref (e.g. a PR branch)")
     p.add_argument("--out", default=None, help="Directory to write report.json/report.md into")
     p.add_argument("--sarif", default=None, help="Also write a SARIF 2.1.0 file to this path")
+    p.add_argument("--repo-label", default=None, help="Name to show for the repo in reports (default: its absolute path)")
     p.add_argument(
         "--fail-on",
         default="high",
@@ -104,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
 
     report = build_report(
         active,
-        repo=str(repo),
+        repo=args.repo_label or str(repo),
         base=args.base,
         head=args.head,
         suppressed=suppressed,

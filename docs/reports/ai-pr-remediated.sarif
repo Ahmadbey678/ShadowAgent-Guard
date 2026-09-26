@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "ShadowAgent Guard",
+          "semanticVersion": "0.2.0",
+          "informationUri": "https://github.com/Ahmadbey678/ShadowAgent-Guard",
+          "rules": [
+            {
+              "id": "CFG-MODE-OVERPERMISSIVE",
+              "name": "CfgModeOverpermissive",
+              "shortDescription": {
+                "text": "Over-permissive agent mode"
+              },
+              "fullDescription": {
+                "text": "A custom agent mode combines file edit with command/execute access."
+              },
+              "helpUri": "https://github.com/Ahmadbey678/ShadowAgent-Guard#rules",
+              "properties": {
+                "tags": [
+                  "security",
+                  "ai-supply-chain",
+                  "agent_config"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "automationDetails": {
+        "id": "shadowagent-guard/"
+      },
+      "properties": {
+        "verdict": "PASS",
+        "grade": "B"
+      },
+      "results": [
+        {
+          "ruleId": "CFG-MODE-OVERPERMISSIVE",
+          "level": "note",
+          "message": {
+            "text": "[LOW] Custom mode 'autonomous-fixer' grants command/execute alongside edit restricted to '\"guard-out/.*\"'\nEvidence: - slug: autonomous-fixer\n    name: Autonomous Fixer\n    roleDefinition: >-\n      You can edit files in the repository and run shell commands.\n      All edits are scoped to the project output directory only.\n      You must ask the user for approval before running destructive commands.\n    groups:\n   \nFix: Edit is scoped by fileRegex, which limits blast radius, but confirm command/execute access is still intentional for this mode."
+          },
+          "properties": {
+            "security-severity": "3.0",
+            "severity": "low"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".bob/custom_modes.yaml"
+                },
+                "region": {
+                  "startLine": 2
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "shadowagentGuard/v1": "669ee87f898bfad009c4fc65f7ee6955644f5c469300737e18571f62abf00282"
+          },
+          "ruleIndex": 0
+        }
+      ]
+    }
+  ]
+}

@@ -247,6 +247,12 @@ class TestCli(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(report["summary"]["verdict"], "BLOCK")
 
+    def test_repo_label(self):
+        with TempRepo() as repo:
+            self._repo_with_skip(repo)
+            _, report, _ = self._run(repo, "--repo-label", "org/demo")
+            self.assertEqual(report["repo"], "org/demo")
+
     def test_suppression_read_from_base(self):
         with TempRepo() as repo:
             self._repo_with_skip(repo, ignore_on_base="TST-SKIPPED tests/* -- slow suite\n")

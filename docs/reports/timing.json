@@ -1,0 +1,11 @@
+{
+  "branch": "ai-pr",
+  "runs": [
+    1.7,
+    1.11,
+    1.06
+  ],
+  "average_seconds": 1.29,
+  "includes": "interpreter start-up, git diffing and live PyPI/npm registry lookups",
+  "measured_at": "2026-09-26"
+}

