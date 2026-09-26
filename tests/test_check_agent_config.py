@@ -103,9 +103,111 @@ class TestCustomModesYaml(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["severity"], "high")
 
+    def test_flags_broad_permissions_nested_under_custom_modes_key(self):
+        content = (
+            "customModes:\n"
+            "  - slug: autonomous-fixer\n"
+            "    name: Autonomous Fixer\n"
+            "    roleDefinition: >-\n"
+            "      Can edit any file and run any command without asking for approval.\n"
+            "    groups:\n"
+            "      - read\n"
+            "      - edit\n"
+            "      - command\n"
+        )
+        findings = check_agent_config.check_custom_modes_yaml(content, ".bob/custom_modes.yaml")
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["severity"], "high")
+
+    def test_restricted_edit_with_command_is_low_severity(self):
+        content = (
+            "customModes:\n"
+            "  - slug: test-runner\n"
+            "    name: Test Runner\n"
+            "    groups:\n"
+            "      - read\n"
+            "      - - edit\n"
+            "        - fileRegex: \\.(test|spec)\\.(js|ts)$\n"
+            "          description: Test files only\n"
+            "      - command\n"
+        )
+        findings = check_agent_config.check_custom_modes_yaml(content, ".bob/custom_modes.yaml")
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["severity"], "low")
+        self.assertIn("test|spec", findings[0]["title"])
+
+    def test_restricted_edit_without_command_is_not_flagged(self):
+        content = (
+            "customModes:\n"
+            "  - slug: docs-editor\n"
+            "    groups:\n"
+            "      - read\n"
+            "      - - edit\n"
+            "        - fileRegex: \\.md$\n"
+            "          description: Markdown files only\n"
+        )
+        findings = check_agent_config.check_custom_modes_yaml(content, ".bob/custom_modes.yaml")
+        self.assertEqual(findings, [])
+
     def test_ignores_read_only_mode(self):
         content = "- name: Reviewer\n  groups:\n    - read\n"
         findings = check_agent_config.check_custom_modes_yaml(content, ".bob/custom_modes.yaml")
+        self.assertEqual(findings, [])
+
+
+class TestCustomModesJson(unittest.TestCase):
+    def test_flags_unrestricted_edit_plus_command(self):
+        content = json.dumps(
+            {
+                "customModes": [
+                    {
+                        "slug": "autonomous-fixer",
+                        "name": "Autonomous Fixer",
+                        "groups": ["read", "edit", "command"],
+                    }
+                ]
+            }
+        )
+        findings = check_agent_config.check_custom_modes_json(content, ".bob/custom_modes.json")
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["severity"], "high")
+
+    def test_restricted_edit_with_command_is_low_severity(self):
+        content = json.dumps(
+            {
+                "customModes": [
+                    {
+                        "slug": "test-runner",
+                        "groups": [
+                            "read",
+                            ["edit", {"fileRegex": r"\.(test|spec)\.(js|ts)$", "description": "Test files only"}],
+                            "command",
+                        ],
+                    }
+                ]
+            }
+        )
+        findings = check_agent_config.check_custom_modes_json(content, ".bob/custom_modes.json")
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["severity"], "low")
+
+    def test_restricted_edit_without_command_is_not_flagged(self):
+        content = json.dumps(
+            {
+                "customModes": [
+                    {
+                        "slug": "docs-editor",
+                        "groups": ["read", ["edit", {"fileRegex": r"\.md$"}]],
+                    }
+                ]
+            }
+        )
+        findings = check_agent_config.check_custom_modes_json(content, ".bob/custom_modes.json")
+        self.assertEqual(findings, [])
+
+    def test_ignores_read_only_mode(self):
+        content = json.dumps({"customModes": [{"slug": "reviewer", "groups": ["read"]}]})
+        findings = check_agent_config.check_custom_modes_json(content, ".bob/custom_modes.json")
         self.assertEqual(findings, [])
 
 

@@ -9,7 +9,9 @@ Scans agent-facing config files (AGENTS.md, .bobrules, .bob/*, .cursorrules,
   - base64 blobs that decode to such suspicious text
   - mcp.json servers with over-broad alwaysAllow, unknown remote URLs, or
     plaintext tokens
-  - custom_modes.yaml modes that grant broad edit + command/execute access
+  - custom_modes.yaml/.json modes that grant broad edit + command/execute
+    access (an edit group scoped by fileRegex is treated as lower severity
+    than an unrestricted one)
   - secret-looking files (.env, *.pem, id_rsa) present with no ignore rule
     covering them
 """
@@ -36,6 +38,7 @@ _EXACT_NAMES = {
     ".mcp.json",
     ".github/copilot-instructions.md",
     ".bob/custom_modes.yaml",
+    ".bob/custom_modes.json",
     ".bob/mcp.json",
 }
 
@@ -265,19 +268,115 @@ def check_mcp_json(content: str, path: str) -> list[dict]:
     return findings
 
 
-# --- custom_modes.yaml (minimal, regex/line-based) --------------------------
+# --- custom_modes.yaml / custom_modes.json -----------------------------
+#
+# Real Bob/Roo custom modes nest under a top-level `customModes:` key, one
+# indented `- slug: ...` list item per mode, e.g.:
+#
+#   customModes:
+#     - slug: autonomous-fixer
+#       name: Autonomous Fixer
+#       roleDefinition: >-
+#         ...
+#       groups:
+#         - read
+#         - edit
+#         - command
+#
+# `edit` can be *restricted* to a subset of files by pairing it with a
+# fileRegex, written as a nested two-item sequence:
+#
+#       groups:
+#         - read
+#         - - edit
+#           - fileRegex: \.(test|spec)\.(js|ts)$
+#             description: Test files only
+#         - command
+#
+# The legacy custom_modes.json equivalent represents that same restriction
+# as a two-element list: ["edit", {"fileRegex": "...", "description": "..."}]
+#
+# We only ever flag the combination of edit + command/execute in one mode;
+# an edit group restricted by fileRegex is treated as materially safer than
+# an unrestricted one, so it drops the finding from high to low/info.
 
-_EDIT_TOKEN = re.compile(r"\bedit\b", re.IGNORECASE)
-_EXEC_TOKEN = re.compile(r"\b(command|execute|shell|terminal)\b", re.IGNORECASE)
+_EXEC_GROUP_NAMES = {"command", "execute"}
+
+
+def _mode_permission_finding(
+    name: str,
+    has_unrestricted_edit: bool,
+    has_restricted_edit: bool,
+    edit_restriction: str | None,
+    has_exec: bool,
+    evidence: str,
+    path: str,
+    line_no: int,
+) -> dict | None:
+    if not has_exec:
+        return None
+    if has_unrestricted_edit:
+        return make_finding(
+            check=CHECK,
+            severity="high",
+            title=f"Custom mode '{name}' grants broad edit + command/execute permissions",
+            evidence=evidence,
+            recommendation=(
+                "Scope this custom mode down: avoid combining unrestricted file edit "
+                "with shell/command execution in one mode."
+            ),
+            file=path,
+            line=line_no,
+        )
+    if has_restricted_edit:
+        return make_finding(
+            check=CHECK,
+            severity="low",
+            title=f"Custom mode '{name}' grants command/execute alongside edit restricted to '{edit_restriction}'",
+            evidence=evidence,
+            recommendation=(
+                "Edit is scoped by fileRegex, which limits blast radius, but confirm "
+                "command/execute access is still intentional for this mode."
+            ),
+            file=path,
+            line=line_no,
+        )
+    return None
+
+
+# --- YAML (indented list under `customModes:`, or a bare top-level list) ----
+
 _NAME_LINE = re.compile(r"^\s*(?:-\s*)?(?:name|slug)\s*:\s*(.+?)\s*$")
+_EDIT_LINE = re.compile(r"^(\s*)-\s*edit\s*$")
+_NESTED_EDIT_LINE = re.compile(r"^(\s*)-\s*-\s*edit\s*$")
+_EXEC_LINE = re.compile(r"^\s*-\s*(?:command|execute)\s*$")
+_FILE_REGEX_LINE = re.compile(r"fileRegex\s*:\s*(.+)$")
+_FLOW_GROUPS_LINE = re.compile(r"groups\s*:\s*\[([^\]]*)\]")
 
 
-def check_custom_modes_yaml(content: str, path: str) -> list[dict]:
-    findings: list[dict] = []
+def _find_mode_blocks(content: str) -> list[tuple[str, list[str], int]]:
+    """Split YAML into (name, block_lines, start_line_no) per mode list item.
+
+    Detects the indent level of `- slug:`/`- name:` list items (0 for a bare
+    top-level list, 2+ when nested under `customModes:`) and splits on any
+    line at that same indent starting with `-`.
+    """
     lines = content.splitlines()
 
-    blocks: list[tuple[str, list[str], int]] = []  # (name, block_lines, start_line_no)
-    current_name = None
+    item_indent: str | None = None
+    for line in lines:
+        m = re.match(r"^(\s*)-\s*(?:slug|name)\s*:", line)
+        if m:
+            item_indent = m.group(1)
+            break
+    if item_indent is None:
+        m = re.search(r"^(\s*)-\s*\S", content, re.MULTILINE)
+        item_indent = m.group(1) if m else ""
+
+    item_start_re = re.compile(r"^" + re.escape(item_indent) + r"-\s*\S")
+
+    blocks: list[tuple[str, list[str], int]] = []
+    current_name: str | None = None
     current_lines: list[str] = []
     current_start = 1
 
@@ -286,38 +385,144 @@ def check_custom_modes_yaml(content: str, path: str) -> list[dict]:
             blocks.append((current_name or "(unnamed mode)", current_lines, current_start))
 
     for i, line in enumerate(lines, start=1):
-        is_new_item = re.match(r"^-\s*\S", line) is not None
-        if is_new_item:
+        if item_start_re.match(line):
             flush()
             current_lines = [line]
             current_start = i
             m = _NAME_LINE.match(line)
             current_name = m.group(1) if m else None
-        else:
+        elif current_lines:
             current_lines.append(line)
             if current_name is None:
                 m = _NAME_LINE.match(line)
                 if m:
                     current_name = m.group(1)
     flush()
+    return blocks
 
-    for name, block_lines, start_line in blocks:
-        block_text = "\n".join(block_lines)
-        if _EDIT_TOKEN.search(block_text) and _EXEC_TOKEN.search(block_text):
-            findings.append(
-                make_finding(
-                    check=CHECK,
-                    severity="high",
-                    title=f"Custom mode '{name}' grants broad edit + command/execute permissions",
-                    evidence=block_text.strip()[:300],
-                    recommendation=(
-                        "Scope this custom mode down: avoid combining unrestricted file edit "
-                        "with shell/command execution in one mode."
-                    ),
-                    file=path,
-                    line=start_line,
-                )
-            )
+
+def _scan_yaml_block_permissions(block_lines: list[str]) -> tuple[bool, bool, str | None, bool]:
+    """Returns (has_unrestricted_edit, has_restricted_edit, edit_restriction, has_exec)."""
+    has_unrestricted_edit = False
+    has_restricted_edit = False
+    edit_restriction: str | None = None
+    has_exec = False
+
+    block_text = "\n".join(block_lines)
+    flow_match = _FLOW_GROUPS_LINE.search(block_text)
+    if flow_match:
+        flow_items = [g.strip() for g in flow_match.group(1).split(",")]
+        if "edit" in flow_items:
+            has_unrestricted_edit = True
+        if any(g in _EXEC_GROUP_NAMES for g in flow_items):
+            has_exec = True
+
+    i = 0
+    while i < len(block_lines):
+        line = block_lines[i]
+        nested = _NESTED_EDIT_LINE.match(line)
+        if nested:
+            base_indent = len(nested.group(1))
+            j = i + 1
+            found_regex = None
+            while j < len(block_lines):
+                nxt = block_lines[j]
+                stripped = nxt.strip()
+                nxt_indent = len(nxt) - len(nxt.lstrip(" "))
+                if stripped.startswith("-") and nxt_indent <= base_indent:
+                    break
+                m = _FILE_REGEX_LINE.search(nxt)
+                if m:
+                    found_regex = m.group(1).strip()
+                j += 1
+            if found_regex:
+                has_restricted_edit = True
+                edit_restriction = found_regex
+            else:
+                has_unrestricted_edit = True
+            i = j
+            continue
+        if _EDIT_LINE.match(line):
+            has_unrestricted_edit = True
+        elif _EXEC_LINE.match(line):
+            has_exec = True
+        i += 1
+
+    return has_unrestricted_edit, has_restricted_edit, edit_restriction, has_exec
+
+
+def check_custom_modes_yaml(content: str, path: str) -> list[dict]:
+    findings: list[dict] = []
+    for name, block_lines, start_line in _find_mode_blocks(content):
+        has_unrestricted_edit, has_restricted_edit, edit_restriction, has_exec = _scan_yaml_block_permissions(
+            block_lines
+        )
+        evidence = "\n".join(block_lines).strip()[:300]
+        finding = _mode_permission_finding(
+            name, has_unrestricted_edit, has_restricted_edit, edit_restriction, has_exec, evidence, path, start_line
+        )
+        if finding:
+            findings.append(finding)
+    return findings
+
+
+# --- JSON (legacy custom_modes.json) ----------------------------------------
+
+
+def check_custom_modes_json(content: str, path: str) -> list[dict]:
+    findings: list[dict] = []
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return findings
+
+    modes = data.get("customModes") if isinstance(data, dict) else None
+    if not isinstance(modes, list):
+        return findings
+
+    for mode in modes:
+        if not isinstance(mode, dict):
+            continue
+        name = mode.get("slug") or mode.get("name") or "(unnamed mode)"
+        groups = mode.get("groups")
+        if not isinstance(groups, list):
+            continue
+
+        has_unrestricted_edit = False
+        has_restricted_edit = False
+        edit_restriction: str | None = None
+        has_exec = False
+
+        for group in groups:
+            if isinstance(group, str):
+                group_name, restriction = group, None
+            elif isinstance(group, list) and len(group) >= 1:
+                group_name = group[0]
+                restriction = group[1] if len(group) > 1 and isinstance(group[1], dict) else None
+            else:
+                continue
+
+            if not isinstance(group_name, str):
+                continue
+            group_name = group_name.lower()
+
+            if group_name == "edit":
+                file_regex = restriction.get("fileRegex") if restriction else None
+                if file_regex:
+                    has_restricted_edit = True
+                    edit_restriction = file_regex
+                else:
+                    has_unrestricted_edit = True
+            elif group_name in _EXEC_GROUP_NAMES:
+                has_exec = True
+
+        evidence = json.dumps({"slug": name, "groups": groups})[:300]
+        finding = _mode_permission_finding(
+            name, has_unrestricted_edit, has_restricted_edit, edit_restriction, has_exec, evidence, path, 0
+        )
+        if finding:
+            findings.append(finding)
+
     return findings
 
 
@@ -397,6 +602,8 @@ def run(repo: Path, base: str, head: str) -> list[dict]:  # noqa: ARG001 (base k
 
         if Path(path).name == "custom_modes.yaml":
             findings.extend(check_custom_modes_yaml(content, path))
+        elif Path(path).name == "custom_modes.json":
+            findings.extend(check_custom_modes_json(content, path))
 
     # secret-looking files present, not covered by .bobignore/.gitignore
     secret_paths = [p for p in all_paths if is_secret_looking_file(p)]
