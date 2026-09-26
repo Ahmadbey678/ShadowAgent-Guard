@@ -215,7 +215,15 @@ def _safe_findings_summary(report: dict, max_lines: int = 0) -> str:
 
 def _show_block_popup(grade: str, critical: int, high: int, report: dict) -> None:
     """
-    Launch a fully-detached Windows message box showing the block reason.
+    Show a SYNCHRONOUS Windows message box and block until the user dismisses it
+    (or the 60-second auto-close fires).
+
+    Synchronous because Bob terminates hook child processes when the hook exits,
+    so a detached/background pop-up would be killed instantly before the user
+    sees it.  subprocess.run waits for PowerShell to return, keeping the hook
+    alive until the dialog is closed.  A 70-second subprocess timeout ensures
+    the hook still exits within Bob's 90-second hook deadline even if something
+    goes wrong.
 
     The message is passed via the environment variable SAG_POPUP_MSG so that
     no untrusted data is ever string-concatenated into the PowerShell command.
@@ -251,35 +259,30 @@ def _show_block_popup(grade: str, critical: int, high: int, report: dict) -> Non
 
     message = "\n".join(lines)
 
-    # PowerShell script reads the message from the environment variable — never
-    # from the command line — so no injection is possible.
-    ps_script = (
-        "[void][System.Reflection.Assembly]::LoadWithPartialName('PresentationFramework');"
-        "[System.Windows.MessageBox]::Show("
-        "$env:SAG_POPUP_MSG,"
-        "'ShadowAgent Guard',"
-        "'OK',"
-        "'Warning'"
-        ")"
+    # WScript.Shell Popup: 60-second auto-close, warning icon (0x30),
+    # always-on-top (0x40000).  Message is read from the environment variable —
+    # never from the command line — so no injection is possible.
+    ps_cmd = (
+        "$w = New-Object -ComObject WScript.Shell; "
+        "[void]$w.Popup($env:SAG_POPUP_MSG, 60, 'ShadowAgent Guard', 0x30 + 0x40000)"
     )
 
     env = os.environ.copy()
     env["SAG_POPUP_MSG"] = message
 
     try:
-        subprocess.Popen(
+        subprocess.run(
             [
                 "powershell",
                 "-NoProfile",
                 "-WindowStyle", "Hidden",
-                "-Command", ps_script,
+                "-Command", ps_cmd,
             ],
             env=env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            # Fully detach the child process so this script can exit immediately.
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            timeout=70,
         )
     except Exception:
         # Never let a pop-up failure affect the exit code or stderr output.

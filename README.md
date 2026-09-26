@@ -244,6 +244,14 @@ was built in Bob IDE.
   a `CHANGES.md` explaining every change, into `guard-out/hardened/`. The
   demo's `ai-pr-remediated` branch applies exactly those files
   ([`fixtures/remediation_fixture.py`](fixtures/remediation_fixture.py)).
+- **Pre-trust hook** ([`.bob/hooks/pretrust.py`](.bob/hooks/pretrust.py)):
+  registered for `SessionStart` and `UserPromptSubmit`.  On a BLOCK verdict the
+  `UserPromptSubmit` handler shows a Windows pop-up with the findings summary and
+  exits 2 to stop the prompt.  The pop-up is **synchronous** (`subprocess.run`,
+  no `DETACHED_PROCESS`): Bob terminates hook child processes when the hook
+  exits, so a detached pop-up would be killed instantly.  `WScript.Shell Popup`
+  provides a 60-second auto-close so the hook can never exceed Bob's 90-second
+  hook deadline.  Set `SHADOWAGENT_NO_POPUP=1` to suppress the dialog.
 
 Session screenshots from Bob IDE are in [`bob-screenshots/`](bob-screenshots/).
 
