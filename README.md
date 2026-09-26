@@ -92,8 +92,9 @@ the hackathon Application URL.
 `scripts/build_demo.py <target_dir>` builds a **separate** git repository
 outside this one (it refuses to run if `<target_dir>` is inside this repo)
 with a clean `main` branch (a tiny calculator app + healthy tests) and an
-`ai-pr` branch simulating an AI agent's pull request that plants ~9 issues
-across all three checks. The payload templates live in `fixtures/`, which is
+`ai-pr` branch simulating an AI agent's pull request that plants ~10 issues
+across all three checks (including one in `package.json` to exercise the npm
+registry path). The payload templates live in `fixtures/`, which is
 listed in `.bobignore` so an IBM Bob agent working in *this* repo never
 treats that injection text as instructions meant for itself.
 
