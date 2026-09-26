@@ -106,6 +106,35 @@ def find_hidden_unicode(content: str) -> list[tuple[int, str, str]]:
     return findings
 
 
+_INVISIBLE = _ZERO_WIDTH | _BIDI_OVERRIDE
+_VIEW_LIMIT = 4000
+
+
+def render_for_humans(content: str) -> str:
+    """The text as an editor or PR diff shows it: invisible characters vanish."""
+    return "".join(c for c in content if ord(c) not in _INVISIBLE and not _TAG_START <= ord(c) <= _TAG_END)
+
+
+def decode_for_agent(content: str) -> str:
+    """The text as a model tokenizes it: tag characters decoded back to ASCII,
+    zero-width/bidi characters made visible as <U+XXXX> markers."""
+    out = []
+    for c in content:
+        cp = ord(c)
+        if _TAG_START <= cp <= _TAG_END:
+            out.append(chr(cp - _TAG_START) if 0x20 <= cp - _TAG_START <= 0x7E else "")
+        elif cp in _INVISIBLE:
+            out.append(f"<U+{cp:04X}>")
+        else:
+            out.append(c)
+    return "".join(out)
+
+
+def hidden_payload(line: str) -> str:
+    """Just the decoded tag-character text on one line (empty if none)."""
+    return _decode_tag_chars([ord(c) for c in line if _TAG_START <= ord(c) <= _TAG_END])
+
+
 # --- suspicious instruction text -------------------------------------------
 
 _SUSPICIOUS_PATTERNS: list[tuple[str, str, str]] = [
@@ -217,6 +246,7 @@ def check_mcp_json(content: str, path: str) -> list[dict]:
                 if isinstance(tool, str) and _UNSAFE_TOOL_TOKENS.search(tool):
                     findings.append(
                         make_finding(
+                            rule_id="CFG-MCP-ALWAYSALLOW",
                             check=CHECK,
                             severity="critical",
                             title=f"MCP server '{name}' has alwaysAllow on a shell/exec/write tool",
@@ -233,6 +263,7 @@ def check_mcp_json(content: str, path: str) -> list[dict]:
         if isinstance(url, str) and re.match(r"^https?://", url) and "localhost" not in url and "127.0.0.1" not in url:
             findings.append(
                 make_finding(
+                    rule_id="CFG-MCP-REMOTE",
                     check=CHECK,
                     severity="high",
                     title=f"MCP server '{name}' points at an unreviewed remote URL",
@@ -249,6 +280,7 @@ def check_mcp_json(content: str, path: str) -> list[dict]:
                         if v and not _PLACEHOLDER_TOKEN.search(v):
                             findings.append(
                                 make_finding(
+                                    rule_id="CFG-MCP-SECRET",
                                     check=CHECK,
                                     severity="high",
                                     title=f"MCP server '{name}' has a plaintext token/secret in config",
@@ -317,6 +349,7 @@ def _mode_permission_finding(
         return None
     if has_unrestricted_edit:
         return make_finding(
+            rule_id="CFG-MODE-OVERPERMISSIVE",
             check=CHECK,
             severity="high",
             title=f"Custom mode '{name}' grants broad edit + command/execute permissions",
@@ -330,6 +363,7 @@ def _mode_permission_finding(
         )
     if has_restricted_edit:
         return make_finding(
+            rule_id="CFG-MODE-OVERPERMISSIVE",
             check=CHECK,
             severity="low",
             title=f"Custom mode '{name}' grants command/execute alongside edit restricted to '{edit_restriction}'",
@@ -557,10 +591,13 @@ def run(repo: Path, base: str, head: str) -> list[dict]:  # noqa: ARG001 (base k
         if content is None:
             continue
 
+        content_lines = content.splitlines()
         for line_no, kind, evidence in find_hidden_unicode(content):
             severity = "critical" if kind == "unicode-tag" else "high"
+            line_text = content_lines[line_no - 1] if line_no <= len(content_lines) else ""
             findings.append(
                 make_finding(
+                    rule_id="CFG-HIDDEN-UNICODE",
                     check=CHECK,
                     severity=severity,
                     title=f"Hidden Unicode ({kind}) found in {Path(path).name}",
@@ -568,12 +605,16 @@ def run(repo: Path, base: str, head: str) -> list[dict]:  # noqa: ARG001 (base k
                     recommendation="Remove hidden/invisible Unicode characters from agent instruction files.",
                     file=path,
                     line=line_no,
+                    rendered_text=render_for_humans(content)[:_VIEW_LIMIT],
+                    decoded_text=decode_for_agent(content)[:_VIEW_LIMIT],
+                    hidden_text=hidden_payload(line_text) or decode_for_agent(line_text),
                 )
             )
 
         for line_no, sev, desc, matched in find_suspicious_instructions(content):
             findings.append(
                 make_finding(
+                    rule_id="CFG-INJECTION",
                     check=CHECK,
                     severity=sev,
                     title=desc,
@@ -587,6 +628,7 @@ def run(repo: Path, base: str, head: str) -> list[dict]:  # noqa: ARG001 (base k
         for line_no, sev, desc, decoded in find_suspicious_base64(content):
             findings.append(
                 make_finding(
+                    rule_id="CFG-ENCODED-INJECTION",
                     check=CHECK,
                     severity=sev,
                     title=desc,
@@ -615,6 +657,7 @@ def run(repo: Path, base: str, head: str) -> list[dict]:  # noqa: ARG001 (base k
             if not is_covered_by_ignore(path, ignore_lines):
                 findings.append(
                     make_finding(
+                        rule_id="CFG-SECRET-UNIGNORED",
                         check=CHECK,
                         severity="high",
                         title=f"Secret-looking file '{path}' is present and not ignored",

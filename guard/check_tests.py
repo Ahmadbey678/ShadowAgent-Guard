@@ -81,6 +81,7 @@ def run(repo: Path, base: str, head: str) -> list[dict]:
         if status == "D":
             findings.append(
                 make_finding(
+                    rule_id="TST-DELETED",
                     check=CHECK,
                     severity="critical",
                     title=f"Test file deleted: {path}",
@@ -102,6 +103,7 @@ def run(repo: Path, base: str, head: str) -> list[dict]:
             if name and name not in added_names:
                 findings.append(
                     make_finding(
+                        rule_id="TST-REMOVED",
                         check=CHECK,
                         severity="high",
                         title=f"Test case removed: {name}",
@@ -117,6 +119,7 @@ def run(repo: Path, base: str, head: str) -> list[dict]:
                 if pattern.search(text):
                     findings.append(
                         make_finding(
+                            rule_id="TST-SKIPPED",
                             check=CHECK,
                             severity="medium",
                             title="Test skip marker added",
@@ -145,6 +148,7 @@ def run(repo: Path, base: str, head: str) -> list[dict]:
                     evidence = f"added: {text.strip()!r} (replacing removed line {prior_line}: {prior_text.strip()!r})"
                 findings.append(
                     make_finding(
+                        rule_id="TST-WEAKENED",
                         check=CHECK,
                         severity=severity,
                         title="Assertion weakened to a trivial check",

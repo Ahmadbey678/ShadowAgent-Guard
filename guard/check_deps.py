@@ -9,6 +9,11 @@ and flags:
               (typosquat risk), from a small built-in list
   - medium:   very low download counts, when cheaply available
   - low:      the registry could not be reached ("could not verify")
+
+It also flags package.json lifecycle scripts (preinstall/install/postinstall)
+that were added or changed between base and head: high, or critical when the
+script fetches from the network or pipes into a shell. These run
+automatically on `npm install`, so they execute before anyone runs the code.
 """
 
 from __future__ import annotations
@@ -22,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from guard.findings import make_finding
-from guard.gitutil import file_at_ref
+from guard.gitutil import changed_files, file_at_ref
 
 DEFAULT_TIMEOUT = 5.0
 USER_AGENT = "ShadowAgentGuard/0.1 (+https://github.com/)"
@@ -90,6 +95,58 @@ def parse_package_json(content: str) -> dict[str, str]:
             for name, version in section.items():
                 deps[name] = str(version)
     return deps
+
+
+INSTALL_HOOKS = ("preinstall", "install", "postinstall")
+_NETWORK_FETCH = re.compile(
+    r"\b(curl|wget|invoke-webrequest|invoke-restmethod|iwr|irm|nc|ncat|ftp|scp)\b|https?://|\bfetch\s*\(",
+    re.IGNORECASE,
+)
+_SHELL_PIPE = re.compile(r"(?<!\|)\|(?!\|)|\b(eval|iex)\b|\bbase64\s+(-d|--decode)\b", re.IGNORECASE)
+
+
+def parse_install_scripts(content: str) -> dict[str, str]:
+    """Return {hook: command} for package.json lifecycle hooks that run on install."""
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    scripts = data.get("scripts") if isinstance(data, dict) else None
+    if not isinstance(scripts, dict):
+        return {}
+    return {h: str(scripts[h]) for h in INSTALL_HOOKS if h in scripts}
+
+
+def install_script_findings(base_content: str, head_content: str, file: str) -> list[dict]:
+    findings = []
+    base_scripts = parse_install_scripts(base_content)
+    for hook, command in parse_install_scripts(head_content).items():
+        if base_scripts.get(hook) == command:
+            continue
+        verb = "changed" if hook in base_scripts else "added"
+        risky = bool(_NETWORK_FETCH.search(command) or _SHELL_PIPE.search(command))
+        evidence = f'"{hook}": "{command}"'
+        if hook in base_scripts:
+            evidence += f' (was: "{base_scripts[hook]}")'
+        findings.append(
+            make_finding(
+                check="deps",
+                rule_id="DEP-INSTALL-SCRIPT",
+                severity="critical" if risky else "high",
+                title=(
+                    f"npm '{hook}' script {verb}"
+                    + (" and fetches from the network / pipes into a shell" if risky else "")
+                ),
+                evidence=evidence[:300],
+                recommendation=(
+                    "Install scripts run automatically on `npm install`, on developer machines and CI. "
+                    "Remove it, or review exactly what it executes and install with --ignore-scripts."
+                ),
+                file=file,
+                line=_find_line(head_content, f'"{hook}"'),
+            )
+        )
+    return findings
 
 
 def _find_line(content: str, needle: str) -> int:
@@ -168,6 +225,7 @@ def _typosquat_findings(check: str, name: str, file: str, line: int) -> list[dic
         if 1 <= dist <= 2:
             findings.append(
                 make_finding(
+                    rule_id="DEP-TYPOSQUAT",
                     check=check,
                     severity="high",
                     title=f"Dependency name '{name}' closely resembles popular package '{popular}'",
@@ -192,6 +250,7 @@ def check_pypi_package(name: str, file: str, line: int, timeout: float) -> list[
     if status == "not_found":
         findings.append(
             make_finding(
+                rule_id="DEP-NONEXISTENT",
                 check=check,
                 severity="critical",
                 title=f"PyPI package '{name}' does not exist",
@@ -208,6 +267,7 @@ def check_pypi_package(name: str, file: str, line: int, timeout: float) -> list[
     if status == "error" or data is None:
         findings.append(
             make_finding(
+                rule_id="DEP-UNVERIFIED",
                 check=check,
                 severity="low",
                 title=f"Could not verify PyPI package '{name}'",
@@ -223,6 +283,7 @@ def check_pypi_package(name: str, file: str, line: int, timeout: float) -> list[
     if age_days is not None and age_days < NEW_PACKAGE_DAYS_THRESHOLD:
         findings.append(
             make_finding(
+                rule_id="DEP-NEW",
                 check=check,
                 severity="high",
                 title=f"PyPI package '{name}' was first published {age_days} day(s) ago",
@@ -240,6 +301,7 @@ def check_pypi_package(name: str, file: str, line: int, timeout: float) -> list[
     if downloads is not None and downloads < LOW_DOWNLOADS_THRESHOLD:
         findings.append(
             make_finding(
+                rule_id="DEP-LOW-DOWNLOADS",
                 check=check,
                 severity="medium",
                 title=f"PyPI package '{name}' has very low download volume",
@@ -261,6 +323,7 @@ def check_npm_package(name: str, file: str, line: int, timeout: float) -> list[d
     if status == "not_found":
         findings.append(
             make_finding(
+                rule_id="DEP-NONEXISTENT",
                 check=check,
                 severity="critical",
                 title=f"npm package '{name}' does not exist",
@@ -277,6 +340,7 @@ def check_npm_package(name: str, file: str, line: int, timeout: float) -> list[d
     if status == "error" or data is None:
         findings.append(
             make_finding(
+                rule_id="DEP-UNVERIFIED",
                 check=check,
                 severity="low",
                 title=f"Could not verify npm package '{name}'",
@@ -292,6 +356,7 @@ def check_npm_package(name: str, file: str, line: int, timeout: float) -> list[d
     if age_days is not None and age_days < NEW_PACKAGE_DAYS_THRESHOLD:
         findings.append(
             make_finding(
+                rule_id="DEP-NEW",
                 check=check,
                 severity="high",
                 title=f"npm package '{name}' was first published {age_days} day(s) ago",
@@ -309,6 +374,7 @@ def check_npm_package(name: str, file: str, line: int, timeout: float) -> list[d
     if downloads is not None and downloads < LOW_DOWNLOADS_THRESHOLD:
         findings.append(
             make_finding(
+                rule_id="DEP-LOW-DOWNLOADS",
                 check=check,
                 severity="medium",
                 title=f"npm package '{name}' has very low download volume",
@@ -347,5 +413,12 @@ def run(repo: Path, base: str, head: str, timeout: float = DEFAULT_TIMEOUT) -> l
         for name in sorted(added):
             line = _find_line(head_content, f'"{name}"')
             findings.extend(check_npm_package(name, path, line, timeout))
+
+    for status, path in changed_files(repo, base, head):
+        if Path(path).name != "package.json" or status == "D":
+            continue
+        head_content = file_at_ref(repo, head, path) or ""
+        base_content = file_at_ref(repo, base, path) or ""
+        findings.extend(install_script_findings(base_content, head_content, path))
 
     return findings
