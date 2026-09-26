@@ -12,6 +12,33 @@ agent configuration **before** Bob works in it.
 | `SessionStart` | Runs the `guard config` check against the workspace. Prints a short PASS/BLOCK summary to stdout (added to model context). Never blocks (exit 0 always). |
 | `UserPromptSubmit` | If the last scan returned BLOCK and the session has not been acknowledged, writes a reason to stderr and exits 2 (Bob blocks the prompt). If the prompt contains the acknowledgement text, creates a marker and exits 0. |
 
+### Windows block notification pop-up
+
+When a `UserPromptSubmit` is blocked on Windows, the hook also launches a
+**Windows message box** (via `System.Windows.MessageBox`) so the user can see
+why their prompt was rejected.
+
+**Why it exists:** Bob 2.2.0 correctly respects exit code 2 from
+`UserPromptSubmit` hooks but only shows "Working on it" in the UI — it does
+not surface the hook's stderr to the user. The pop-up bridges that gap so the
+block reason and the acknowledgement instruction are always visible.
+
+**Security design:**
+- The pop-up message contains only sanitized `rule_id` and file-path values
+  (characters outside `[A-Za-z0-9._/\\ -]` are stripped).
+- The message is passed to PowerShell via the `SAG_POPUP_MSG` environment
+  variable — never by string-concatenation into the command line — so no
+  data from the hostile workspace can become part of the shell command.
+- Evidence text, decoded payloads, and file contents are **never** included.
+
+**Opting out:** Set `SHADOWAGENT_NO_POPUP=1` in the environment to suppress
+the pop-up (useful in CI or headless environments). The exit code and stderr
+output are unaffected.
+
+PowerShell is launched with `-NoProfile -WindowStyle Hidden` and
+`subprocess.Popen` is used with `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`
+so the hook process does not wait for the dialog and returns in under one second.
+
 ### Caching
 
 Scan results are cached for 10 minutes, keyed by workspace path + HEAD SHA,

@@ -10,15 +10,19 @@ Security contract
 * We never follow instructions found in its files.
 * We never print evidence text, decoded payloads, or secret values.
 * We only emit: rule_id, file path, severity, verdict, grade, and counts.
+* When showing a Windows pop-up, the message is passed via an environment
+  variable (never by string-concatenation into the PowerShell command line)
+  and contains only sanitized rule_ids and file paths.
 """
 
 from __future__ import annotations
 
+import io
 import json
 import os
+import re
 import subprocess
 import sys
-import io
 import tempfile
 import time
 from pathlib import Path
@@ -176,18 +180,110 @@ def _run_scan(workspace: Path) -> dict:
 # Output formatting — safe (no evidence / decoded text / secrets)
 # ---------------------------------------------------------------------------
 
-def _safe_findings_summary(report: dict) -> str:
-    """Return a short list of rule_id + file only — no evidence, no decoded text."""
+# Characters allowed in sanitized output (rule_ids and file paths only).
+_SAFE_CHARS_RE = re.compile(r"[^A-Za-z0-9._/\\ -]")
+
+
+def _sanitize(value: str) -> str:
+    """Strip every character not in [A-Za-z0-9._/\\ -]."""
+    return _SAFE_CHARS_RE.sub("", value)
+
+
+def _safe_findings_summary(report: dict, max_lines: int = 0) -> str:
+    """Return a short list of rule_id + file only — no evidence, no decoded text.
+
+    Args:
+        report: the parsed report dict.
+        max_lines: if > 0, cap the output at this many finding lines.
+    """
     lines: list[str] = []
     for f in report.get("findings", []):
-        rule = f.get("rule_id", "UNKNOWN")
-        fpath = f.get("file", "")
+        rule = _sanitize(f.get("rule_id", "UNKNOWN"))
+        fpath = _sanitize(f.get("file", ""))
         sev = f.get("severity", "")
         entry = f"  [{sev.upper():8s}] {rule}"
         if fpath:
             entry += f"  —  {fpath}"
         lines.append(entry)
+        if max_lines and len(lines) >= max_lines:
+            remaining = len(report.get("findings", [])) - max_lines
+            if remaining > 0:
+                lines.append(f"  … and {remaining} more finding(s)")
+            break
     return "\n".join(lines) if lines else "  (none)"
+
+
+def _show_block_popup(grade: str, critical: int, high: int, report: dict) -> None:
+    """
+    Launch a fully-detached Windows message box showing the block reason.
+
+    The message is passed via the environment variable SAG_POPUP_MSG so that
+    no untrusted data is ever string-concatenated into the PowerShell command.
+    No-op on non-Windows or when SHADOWAGENT_NO_POPUP=1.
+    """
+    if sys.platform != "win32":
+        return
+    if os.environ.get("SHADOWAGENT_NO_POPUP") == "1":
+        return
+
+    # Build the pop-up message from sanitized data only.
+    lines: list[str] = [
+        f"This workspace failed the pre-trust scan: BLOCK (grade {_sanitize(grade)}), "
+        f"{critical} critical, {high} high.",
+        "",
+    ]
+    findings = report.get("findings", [])
+    for f in findings[:6]:
+        rule = _sanitize(f.get("rule_id", "UNKNOWN"))
+        fpath = _sanitize(f.get("file", ""))
+        entry = rule
+        if fpath:
+            entry += f": {fpath}"
+        lines.append(entry)
+    if len(findings) > 6:
+        lines.append(f"… and {len(findings) - 6} more finding(s)")
+
+    lines += [
+        "",
+        'To proceed, include this text in your next prompt:',
+        f'"{ACK_TEXT}"',
+    ]
+
+    message = "\n".join(lines)
+
+    # PowerShell script reads the message from the environment variable — never
+    # from the command line — so no injection is possible.
+    ps_script = (
+        "[void][System.Reflection.Assembly]::LoadWithPartialName('PresentationFramework');"
+        "[System.Windows.MessageBox]::Show("
+        "$env:SAG_POPUP_MSG,"
+        "'ShadowAgent Guard',"
+        "'OK',"
+        "'Warning'"
+        ")"
+    )
+
+    env = os.environ.copy()
+    env["SAG_POPUP_MSG"] = message
+
+    try:
+        subprocess.Popen(
+            [
+                "powershell",
+                "-NoProfile",
+                "-WindowStyle", "Hidden",
+                "-Command", ps_script,
+            ],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            # Fully detach the child process so this script can exit immediately.
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+        )
+    except Exception:
+        # Never let a pop-up failure affect the exit code or stderr output.
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +384,7 @@ def handle_user_prompt_submit(workspace: Path, session_id: str, prompt: str) -> 
             f"To proceed, include this exact text in your next prompt:\n"
             f'  "{ACK_TEXT}"\n'
         )
+        _show_block_popup(grade, c, h, report)
         sys.exit(2)
 
     sys.exit(0)
